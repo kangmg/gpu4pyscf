@@ -8,6 +8,11 @@ if [ -z "$GPU4PYSCF_PATH" ]; then
     exit 1
 fi
 
+echo "Found gpu4pyscf at: $GPU4PYSCF_PATH"
+
+#############################################
+# Patch 1: ase_interface.py - jqc support
+#############################################
 TARGET_FILE="$GPU4PYSCF_PATH/tools/ase_interface.py"
 
 if [ ! -f "$TARGET_FILE" ]; then
@@ -15,10 +20,8 @@ if [ ! -f "$TARGET_FILE" ]; then
     exit 1
 fi
 
-echo "Found gpu4pyscf at: $GPU4PYSCF_PATH"
 echo "Patching: $TARGET_FILE"
 
-# Create patch file
 PATCH_FILE=$(mktemp)
 cat > "$PATCH_FILE" << 'EOF'
 --- a/ase_interface.py
@@ -77,19 +80,106 @@ cat > "$PATCH_FILE" << 'EOF'
          if self.pbc:
 EOF
 
-# Apply patch
 cd "$GPU4PYSCF_PATH/tools"
-patch -p1 --forward < "$PATCH_FILE"
+patch -p1 --forward < "$PATCH_FILE" 2>/dev/null
 RESULT=$?
-
-# Cleanup
 rm -f "$PATCH_FILE"
 
 if [ $RESULT -eq 0 ]; then
-    echo "Patch applied successfully!"
+    echo "  -> ase_interface.py patched successfully!"
 elif [ $RESULT -eq 1 ]; then
-    echo "Patch already applied or partially applied"
+    echo "  -> ase_interface.py already patched"
 else
-    echo "Error applying patch"
+    echo "  -> Error patching ase_interface.py"
+fi
+
+#############################################
+# Patch 2: method_config.py - method support
+#############################################
+TARGET_FILE="$GPU4PYSCF_PATH/tools/method_config.py"
+
+if [ ! -f "$TARGET_FILE" ]; then
+    echo "Error: method_config.py not found at $TARGET_FILE"
     exit 1
 fi
+
+echo "Patching: $TARGET_FILE"
+
+PATCH_FILE=$(mktemp)
+cat > "$PATCH_FILE" << 'EOF'
+--- a/method_config.py
++++ b/method_config.py
+@@ -35,6 +35,7 @@
+         'spin': None,
+         'xc': 'b3lyp',
+         'disp': None,
++        'method': None,
+         'grids': {'atom_grid': (99,590)},
+         'nlcgrids': {'atom_grid': (50,194)},
+         'basis': 'def2-tzvpp',
+@@ -67,14 +68,37 @@
+     if xc == 'LDA':
+         xc = 'LDA,VWN5'
+
+-    if xc.lower() == 'hf':
+-        mf = scf.HF(mol)
++    # Method mapping for explicit method specification
++    method_map = {
++        # HF methods
++        'hf': scf.HF, 'rhf': scf.RHF, 'uhf': scf.UHF, 'rohf': scf.ROHF,
++        'ghf': scf.GHF,
++        # DFT methods
++        'ks': dft.KS, 'rks': dft.RKS, 'uks': dft.UKS, 'roks': dft.ROKS,
++        'gks': dft.GKS,
++    }
++
++    method_type = config.get('method')
++    if method_type is not None:
++        method_key = method_type.lower()
++        if method_key not in method_map:
++            raise ValueError(f"Unknown method: {method_type}. "
++                           f"Supported: {list(method_map.keys())}")
++        method_cls = method_map[method_key]
++        if method_key in ('hf', 'rhf', 'uhf', 'rohf', 'ghf'):
++            mf = method_cls(mol)
++        else:
++            mf = method_cls(mol, xc=xc)
++    elif xc.lower() == 'hf':
++        mf = scf.HF(mol)
+     else:
+         mf = dft.KS(mol, xc=xc)
+-        grids = config['grids']
+-        nlcgrids = config['nlcgrids']
+-        if 'atom_grid' in grids: mf.grids.atom_grid = grids['atom_grid']
+-        if 'level' in grids:     mf.grids.level     = grids['level']
++
++    # Apply grid settings for DFT methods
++    if hasattr(mf, 'grids'):
++        grids = config.get('grids', {})
++        nlcgrids = config.get('nlcgrids', {})
++        if 'atom_grid' in grids: mf.grids.atom_grid = grids['atom_grid']
++        if 'level' in grids:     mf.grids.level     = grids['level']
+         if mf._numint.libxc.is_nlc(mf.xc):
+             if 'atom_grid' in nlcgrids: mf.nlcgrids.atom_grid = nlcgrids['atom_grid']
+             if 'level' in nlcgrids:     mf.nlcgrids.level     = nlcgrids['level']
+EOF
+
+cd "$GPU4PYSCF_PATH/tools"
+patch -p1 --forward < "$PATCH_FILE" 2>/dev/null
+RESULT=$?
+rm -f "$PATCH_FILE"
+
+if [ $RESULT -eq 0 ]; then
+    echo "  -> method_config.py patched successfully!"
+elif [ $RESULT -eq 1 ]; then
+    echo "  -> method_config.py already patched"
+else
+    echo "  -> Error patching method_config.py"
+fi
+
+echo ""
+echo "Done! Usage example:"
+echo "  config = get_default_config()"
+echo "  config['method'] = 'uks'  # or 'rks', 'uhf', 'rhf', etc."
+echo "  mf = method_from_config(config)"
+echo "  atoms.calc = PySCF(method=mf, use_jqc=True)"
