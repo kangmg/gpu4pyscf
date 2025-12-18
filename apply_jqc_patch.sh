@@ -1,5 +1,28 @@
---- a/gpu4pyscf/tools/ase_interface.py
-+++ b/gpu4pyscf/tools/ase_interface.py
+#!/bin/bash
+
+# Find gpu4pyscf package path
+GPU4PYSCF_PATH=$(python3 -c "import gpu4pyscf; print(gpu4pyscf.__path__[0])" 2>/dev/null)
+
+if [ -z "$GPU4PYSCF_PATH" ]; then
+    echo "Error: gpu4pyscf package not found"
+    exit 1
+fi
+
+TARGET_FILE="$GPU4PYSCF_PATH/tools/ase_interface.py"
+
+if [ ! -f "$TARGET_FILE" ]; then
+    echo "Error: ase_interface.py not found at $TARGET_FILE"
+    exit 1
+fi
+
+echo "Found gpu4pyscf at: $GPU4PYSCF_PATH"
+echo "Patching: $TARGET_FILE"
+
+# Create patch file
+PATCH_FILE=$(mktemp)
+cat > "$PATCH_FILE" << 'EOF'
+--- a/ase_interface.py
++++ b/ase_interface.py
 @@ -20,6 +20,14 @@
            """)
      raise RuntimeError("ASE is not found")
@@ -52,3 +75,21 @@
          self.method = method
          self.pbc = hasattr(method, 'cell')
          if self.pbc:
+EOF
+
+# Apply patch
+cd "$GPU4PYSCF_PATH/tools"
+patch -p1 --forward < "$PATCH_FILE"
+RESULT=$?
+
+# Cleanup
+rm -f "$PATCH_FILE"
+
+if [ $RESULT -eq 0 ]; then
+    echo "Patch applied successfully!"
+elif [ $RESULT -eq 1 ]; then
+    echo "Patch already applied or partially applied"
+else
+    echo "Error applying patch"
+    exit 1
+fi
