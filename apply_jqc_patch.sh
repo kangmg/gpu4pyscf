@@ -11,7 +11,7 @@ fi
 echo "Found gpu4pyscf at: $GPU4PYSCF_PATH"
 
 #############################################
-# Patch 1: ase_interface.py - jqc support
+# Patch 1: ase_interface.py
 #############################################
 TARGET_FILE="$GPU4PYSCF_PATH/tools/ase_interface.py"
 
@@ -41,31 +41,53 @@ cat > "$PATCH_FILE" << 'EOF'
  import numpy as np
  from ase.units import Debye
  from pyscf import lib
-@@ -48,7 +56,7 @@
+@@ -27,6 +35,7 @@
+ from pyscf.gto.mole import charge
+ from pyscf.pbc.gto.cell import Cell
+ from pyscf.pbc.tools.pyscf_ase import ase_atoms_to_pyscf
++from gpu4pyscf.tools.method_config import method_from_config
+
+ # These functions are copied from the development branch of PySCF and will be
+ # provided by the pyscf.pbc.tools.pyscf_ase module in PySCF 2.11.
+@@ -48,7 +57,7 @@
      default_parameters = {}
 
      def __init__(self, restart=None, label='PySCF', atoms=None, directory='.',
 -                 method=None, **kwargs):
-+                 method=None, use_jqc=False, **kwargs):
++                 method=None, config=None, use_jqc=False, **kwargs):
          """Construct PySCF-calculator object.
 
          Parameters
-@@ -58,6 +66,11 @@
+@@ -58,14 +67,40 @@
              Default is 'PySCF'.
 
          method: A PySCF method class
++            Either method or config must be provided.
++
++        config: dict
++            Configuration dict for method_from_config(). If provided,
++            method will be constructed from this config. The config can
++            include 'method' key to specify SCF type (e.g., 'uks', 'uhf').
 +
 +        use_jqc: bool
 +            If True and jqc package is available, apply JIT-compiled PySCF
-+            kernels using jqc.pyscf.apply(). This can provide performance
-+            improvements for certain calculations. Default is False.
++            kernels using jqc.pyscf.apply(). Default is False.
          """
          Calculator.__init__(self, restart, label=label, atoms=atoms,
                              directory=directory, **kwargs)
-@@ -65,6 +78,15 @@
-         if not isinstance(method, lib.StreamObject):
-             raise RuntimeError(f'{method} must be an instance of a PySCF method')
 
+-        if not isinstance(method, lib.StreamObject):
+-            raise RuntimeError(f'{method} must be an instance of a PySCF method')
++        # Build method from config if provided
++        if config is not None:
++            if 'atom' not in config and atoms is not None:
++                config['atom'] = ase_atoms_to_pyscf(atoms)
++            method = method_from_config(config)
++        elif method is None:
++            raise RuntimeError('Either method or config must be provided')
++        elif not isinstance(method, lib.StreamObject):
++            raise RuntimeError(f'{method} must be an instance of a PySCF method')
++
 +        # Apply jqc JIT-compilation if requested and available
 +        self.use_jqc = use_jqc
 +        if use_jqc:
@@ -74,10 +96,9 @@ cat > "$PATCH_FILE" << 'EOF'
 +            else:
 +                import warnings
 +                warnings.warn('jqc package not found. Install it via: pip install jqc')
-+
+
          self.method = method
          self.pbc = hasattr(method, 'cell')
-         if self.pbc:
 EOF
 
 cd "$GPU4PYSCF_PATH/tools"
@@ -179,7 +200,9 @@ fi
 
 echo ""
 echo "Done! Usage example:"
+echo "  from gpu4pyscf.tools import get_default_config"
+echo "  from gpu4pyscf.tools.ase_interface import PySCF"
+echo ""
 echo "  config = get_default_config()"
-echo "  config['method'] = 'uks'  # or 'rks', 'uhf', 'rhf', etc."
-echo "  mf = method_from_config(config)"
-echo "  atoms.calc = PySCF(method=mf, use_jqc=True)"
+echo "  config['method'] = 'uks'"
+echo "  atoms.calc = PySCF(atoms=atoms, config=config, use_jqc=True)"
